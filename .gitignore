@@ -1,0 +1,36 @@
+# Godot
+.godot/
+*.import
+
+# Original game files are copyrighted: bring your own copy (see README)
+/assets/original/**
+!/assets/original/.gitkeep
+!/assets/original/.gdignore
+/assets/game/**
+!/assets/game/.gitkeep
+/assets/decoded/**
+!/assets/decoded/.gitkeep
+/assets/runtime/**
+
+# Builds and exports
+/export/
+/bin/web/
+/bin/*.a
+/native/build/
+*.o
+*.os
+
+# Local working notes and one-off debug scripts
+/docs/PORT_STATUS.md
+/docs/GOAL.md
+/docs/EXECUTION_MODEL.md
+/scenes/main.tscn
+/scripts/**/check_*.gd
+/scripts/**/check_*.gd.uid
+/scripts/**/shot_*.gd
+/scripts/**/shot_*.gd.uid
+*.url
+/tools/museum_silent.conf
+*.TMP
+~*
+.sconsign.dblite
