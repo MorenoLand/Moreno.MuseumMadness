@@ -10,7 +10,8 @@ to `bin/` and are loaded through `bin/museum_vm.gdextension`.
   (writes `extension_api.json` and `gdextension_interface.h`; copy the header over
   `godot-cpp/gdextension/gdextension_interface.h`).
 - SCons (`pip install scons`).
-- Windows: MinGW-w64 g++ (MSYS2).
+- Windows: MinGW-w64 g++ (MSYS2, add `use_mingw=yes`) or Visual Studio (the default).
+- Linux: GCC or Clang. macOS: Xcode command line tools.
 - Web: emsdk with emscripten **4.0.10** (the version the Redot 26.2 web templates were built with;
   see `"4.0.10"` in the templates' `godot.js`). Export with the `web_dlink_*` templates
   ("Extensions Support" on).
@@ -23,6 +24,9 @@ From `native/`, with `GODOT_CPP` pointing at the godot-cpp checkout and `API` at
 ```bash
 GODOT_CPP=/path/to/godot-cpp scons platform=windows use_mingw=yes target=template_debug custom_api_file=$API
 GODOT_CPP=/path/to/godot-cpp scons platform=windows use_mingw=yes target=template_release custom_api_file=$API
+# Linux / macOS
+GODOT_CPP=/path/to/godot-cpp scons platform=linux target=template_debug custom_api_file=$API
+GODOT_CPP=/path/to/godot-cpp scons platform=macos target=template_debug custom_api_file=$API
 # web, inside an emsdk environment (threads and no-threads variants):
 GODOT_CPP=/path/to/godot-cpp scons platform=web target=template_release threads=no custom_api_file=$API
 GODOT_CPP=/path/to/godot-cpp scons platform=web target=template_debug threads=no custom_api_file=$API

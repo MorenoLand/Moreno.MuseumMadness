@@ -755,7 +755,9 @@ func _make_env(seg: int, prog: String) -> void:
 		cpu.wb(seg, i, bytes[i])
 
 
-func _make_psp(seg: int, cmdline: String, parent: int) -> void:
+# The command tail is raw bytes: launchers end it with a NUL that DOS passes through unchanged
+# (a String would turn that byte into U+FFFD and corrupt the program's arguments).
+func _make_psp(seg: int, cmdline: Variant, parent: int) -> void:
 	for i in PSP_SIZE:
 		cpu.wb(seg, i, 0)
 	cpu.wb(seg, 0, 0xCD)
@@ -763,11 +765,12 @@ func _make_psp(seg: int, cmdline: String, parent: int) -> void:
 	cpu.ww(seg, 2, TOP_SEG)
 	cpu.ww(seg, 0x16, parent)
 	cpu.ww(seg, 0x2C, 0)
-	var tail := cmdline.substr(0, 126)
-	cpu.wb(seg, 0x80, tail.length())
-	for i in tail.length():
-		cpu.wb(seg, 0x81 + i, tail.unicode_at(i))
-	cpu.wb(seg, 0x81 + tail.length(), 0x0D)
+	var tail: PackedByteArray = cmdline if cmdline is PackedByteArray else str(cmdline).to_ascii_buffer()
+	tail = tail.slice(0, 126)
+	cpu.wb(seg, 0x80, tail.size())
+	for i in tail.size():
+		cpu.wb(seg, 0x81 + i, tail[i])
+	cpu.wb(seg, 0x81 + tail.size(), 0x0D)
 
 
 # Free paragraphs from `seg` to the next block or the top of memory.
@@ -780,7 +783,7 @@ func _room_at(seg: int) -> int:
 
 
 # Loads a .COM or MZ program at load_seg (its PSP); sets CS:IP and SS:SP. Returns false on error.
-func load_program(name: String, cmdline: String, load_seg: int, parent: int) -> bool:
+func load_program(name: String, cmdline: Variant, load_seg: int, parent: int) -> bool:
 	var path := _find_file(name.to_upper())
 	if path == "":
 		return false
@@ -848,14 +851,19 @@ func _exec() -> void:
 	var tail_off := cpu.rw(pb_seg, pb_off + 2)
 	var tail_seg := cpu.rw(pb_seg, pb_off + 4)
 	var n := cpu.rb(tail_seg, tail_off)
-	var cmd := ""
+	var cmd := PackedByteArray()
+	var shown := ""
 	for i in n:
-		cmd += char(cpu.rb(tail_seg, tail_off + 1 + i))
-	# Save the parent context; the IRET frame is on the parent's stack.
+		var c := cpu.rb(tail_seg, tail_off + 1 + i)
+		cmd.append(c)
+		shown += char(c) if c >= 32 and c < 127 else "."
+	# Save the parent context; the IRET frame is on the parent's stack. The interrupt table is
+	# saved too and put back when the child exits, so hooks a child leaves behind (its sound
+	# driver's timer handler) can't point into memory the next program overwrites.
 	exec_stack.push_back({
 		"r": cpu.r.duplicate(), "s": cpu.s.duplicate(), "ip": cpu.ip, "flags": cpu.flags,
 		"psp": psp_seg, "free": mcb_free_seg, "dta_seg": dta_seg, "dta_off": dta_off,
-		"blocks": blocks.duplicate(true),
+		"blocks": blocks.duplicate(true), "ivt": cpu.core.read(0, 0x400),
 	})
 	var child_seg := -1
 	var best := 0
@@ -863,13 +871,14 @@ func _exec() -> void:
 		if run[1] > best:
 			best = run[1]
 			child_seg = run[0] + 0x10
-	print("dos: exec %s '%s' at %04X" % [name, cmd, child_seg])
+	print("dos: exec %s '%s' at %04X" % [name, shown, child_seg])
 	if not load_program(name, cmd, child_seg, psp_seg):
 		var ctx: Dictionary = exec_stack.pop_back()
 		cpu.r = ctx.r
 		cpu.s = ctx.s
 		cpu.ip = ctx.ip
 		blocks = ctx.blocks
+		cpu.core.load(0, ctx.ivt)
 		cpu.r[0] = 2
 		set_cf(true)
 		return
@@ -891,6 +900,7 @@ func _terminate(code: int) -> void:
 	psp_seg = ctx.psp
 	mcb_free_seg = ctx.free
 	blocks = ctx.blocks
+	cpu.core.load(0, ctx.ivt)
 	dta_seg = ctx.dta_seg
 	dta_off = ctx.dta_off
 	# back in the parent's INT 21 stub (F1 21 CF): clear CF in its IRET frame
