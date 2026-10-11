@@ -20,7 +20,12 @@ It runs on desktop and in the browser.
 - Click once in the window to let the game take the mouse.
 - **Ctrl**, **Alt** or **Ctrl+F10** gives the mouse back.
 - **Esc** skips the intro (and a few other scenes), **Space** turns dialogue pages.
-- Saves go to Godot's user folder (`user://dos/`), or the browser's storage on the web.
+- **F1** opens the save menu: export your saves as a `.zip`, import one, or open the save folder.
+- **F2** switches between the original shape and stretched to fill the window.
+
+On desktop, saves live in `%APPDATA%\Museum Madness\dos\` (Windows) or the matching user data
+folder on other systems. In the browser they're kept in the site's storage, so use **F1 > Export
+saves** if you want a copy you can move around.
 
 ## Exporting
 

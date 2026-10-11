@@ -373,7 +373,7 @@ func _int21() -> void:
 		0x02:
 			pass
 		0x06, 0x07, 0x08:
-			if keys.is_empty():
+			if cpu.core.key_count() == 0:
 				if ah == 0x06:
 					set_zf(true)
 					cpu.set_r8(0, 0)
@@ -381,13 +381,13 @@ func _int21() -> void:
 					_rewind_int()
 				return
 			set_zf(false)
-			cpu.set_r8(0, keys.pop_front() & 0xFF)
+			cpu.set_r8(0, cpu.core.pop_key() & 0xFF)
 		0x09:
 			pass
 		0x0B:
-			cpu.set_r8(0, 0 if keys.is_empty() else 0xFF)
+			cpu.set_r8(0, 0 if cpu.core.key_count() == 0 else 0xFF)
 		0x0C:
-			keys.clear()
+			cpu.core.clear_keys()
 		0x0E:
 			cpu.set_r8(0, 3)
 		0x19:
@@ -538,8 +538,12 @@ func _read() -> void:
 	n = maxi(n, 0)
 	var seg := cpu.s[3]
 	var off := cpu.r[2]
-	for i in n:
-		cpu.wb(seg, off + i, data[f.pos + i])
+	if off + n <= 0x10000:
+		# one block copy instead of a call per byte
+		cpu.core.load((seg << 4) + off, data.slice(f.pos, f.pos + n))
+	else:
+		for i in n:
+			cpu.wb(seg, off + i, data[f.pos + i])
 	f.pos += n
 	cpu.r[0] = n
 	set_cf(false)
@@ -560,8 +564,14 @@ func _write() -> void:
 	var data: PackedByteArray = f.data
 	if f.pos + n > data.size():
 		data.resize(f.pos + n)
-	for i in n:
-		data[f.pos + i] = cpu.rb(cpu.s[3], cpu.r[2] + i)
+	var src := cpu.r[2]
+	if src + n <= 0x10000:
+		var block: PackedByteArray = cpu.core.read((cpu.s[3] << 4) + src, n)
+		for i in n:
+			data[f.pos + i] = block[i]
+	else:
+		for i in n:
+			data[f.pos + i] = cpu.rb(cpu.s[3], cpu.r[2] + i)
 	f.data = data
 	f.pos += n
 	f.dirty = true

@@ -62,6 +62,11 @@ void X86Core::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("enter_isr", "seg", "off"), &X86Core::enter_isr);
 	ClassDB::bind_method(D_METHOD("vga_mode13", "clear"), &X86Core::vga_mode13);
 	ClassDB::bind_method(D_METHOD("screen"), &X86Core::screen);
+	ClassDB::bind_method(D_METHOD("take_video_dirty"), &X86Core::take_video_dirty);
+	ClassDB::bind_method(D_METHOD("push_key", "code"), &X86Core::push_key);
+	ClassDB::bind_method(D_METHOD("key_count"), &X86Core::key_count);
+	ClassDB::bind_method(D_METHOD("pop_key"), &X86Core::pop_key);
+	ClassDB::bind_method(D_METHOD("clear_keys"), &X86Core::clear_keys);
 	ClassDB::bind_method(D_METHOD("palette"), &X86Core::palette);
 	ClassDB::bind_method(D_METHOD("dac_get", "i"), &X86Core::dac_get);
 	ClassDB::bind_method(D_METHOD("vga_reg", "bank", "i"), &X86Core::vga_reg);
@@ -146,6 +151,7 @@ uint8_t X86Core::vga_read(uint32_t a) {
 }
 
 void X86Core::vga_write(uint32_t a, uint8_t v) {
+	video_dirty = true;
 	uint32_t off = a - 0xA0000;
 	if (seq[4] & 0x08) {
 		planes[off & 3][(off >> 2) & 0xFFFF] = v;
@@ -187,6 +193,7 @@ void X86Core::vga_write(uint32_t a, uint8_t v) {
 }
 
 void X86Core::vga_mode13(bool clear) {
+	video_dirty = true;
 	seq[4] = 0x0E;
 	seq[2] = 0x0F;
 	crtc[0x13] = 40;
@@ -293,10 +300,11 @@ void X86Core::out_port(int port, int v) {
 		case 0x3CE: gc_index = v; break;
 		case 0x3CF: gc[gc_index & 15] = v; break;
 		case 0x3D4: crtc_index = v; break;
-		case 0x3D5: crtc[crtc_index & 31] = v; break;
+		case 0x3D5: crtc[crtc_index & 31] = v; video_dirty = true; break;
 		case 0x3C7: dac_read = v; dac_comp = 0; break;
 		case 0x3C8: dac_write = v; dac_comp = 0; break;
 		case 0x3C9:
+			video_dirty = true;
 			dac[dac_write * 3 + dac_comp] = v & 0x3F;
 			if (++dac_comp == 3) {
 				dac_comp = 0;
@@ -405,6 +413,41 @@ void X86Core::bios_tick() {
 	poke16(0x46C, t & 0xFFFF);
 	poke16(0x46E, t >> 16);
 	if (peek16(0x1C * 4 + 2) != 0xF000) do_interrupt(0x1C);
+}
+
+// The FLAGS image an INT pushed sits at SS:SP+4 (IP, CS, FLAGS) while a BIOS stub runs.
+void X86Core::set_return_flag(uint16_t bit, bool on) {
+	uint16_t f = rw(s[2], uint16_t(r[4] + 4));
+	f = on ? (f | bit) : (f & ~bit);
+	ww(s[2], uint16_t(r[4] + 4), f);
+}
+
+// INT 16h keyboard services.
+void X86Core::bios_int16() {
+	int ah = get_r8(4) & 0xEF; // 10h-12h are the extended versions of 00h-02h
+	switch (ah) {
+		case 0x00:
+			if (keys.empty()) {
+				// wait for a key: back the return address up onto the INT so it repeats
+				uint16_t ret = rw(s[2], r[4]);
+				ww(s[2], r[4], uint16_t(ret - 2));
+				halted = true;
+			} else {
+				r[0] = keys.front();
+				keys.erase(keys.begin());
+			}
+			break;
+		case 0x01:
+			if (keys.empty()) set_return_flag(ZF, true);
+			else {
+				r[0] = keys.front();
+				set_return_flag(ZF, false);
+			}
+			break;
+		case 0x02:
+			set_r8(0, 0);
+			break;
+	}
 }
 
 // ---- flags & ALU --------------------------------------------------------------------------
@@ -929,7 +972,10 @@ void X86Core::exec(uint8_t op) {
 		case 0xF1: {
 			int n = fetch8();
 			if (n == 0x08) bios_tick();
-			else trap = n;
+			else if (n == 0x16) bios_int16();
+			else if (n == 0x1C) {
+				// BIOS user timer tick: nothing to do
+			} else trap = n;
 			break;
 		}
 		case 0xF4: halted = true; break;

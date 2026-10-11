@@ -14,6 +14,8 @@ boot_splash/show_image=false
 boot_splash/bg_color=Color(0, 0, 0, 1)
 
 config/name="Museum Madness"
+config/use_custom_user_dir=true
+config/custom_user_dir_name="Museum Madness"
 run/main_scene="res://scenes/vm/museum.tscn"
 config/features=PackedStringArray("26.2", "Redot")
 

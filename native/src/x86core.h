@@ -63,12 +63,21 @@ public:
 		return true;
 	}
 
+	// keyboard: BIOS keystrokes (scan << 8 | ascii). INT 16h is answered here, without leaving
+	// the core: games poll it thousands of times per second.
+	void push_key(int code) { keys.push_back(uint16_t(code)); }
+	int key_count() const { return int(keys.size()); }
+	int pop_key() { if (keys.empty()) return 0; int k = keys.front(); keys.erase(keys.begin()); return k; }
+	void clear_keys() { keys.clear(); }
+
 	// video
 	void vga_mode13(bool clear);
 	PackedByteArray screen() const;
+	// true if VGA memory, display start or the DAC changed since the last call
+	bool take_video_dirty() { bool d = video_dirty; video_dirty = false; return d; }
 	PackedByteArray palette() const;
 	int dac_get(int i) const { return dac[i % 768]; }
-	void dac_set(int i, int v) { dac[i % 768] = v & 0x3F; }
+	void dac_set(int i, int v) { dac[i % 768] = v & 0x3F; video_dirty = true; }
 	void vga_set_reg(int bank, int i, int v) { if (bank == 0) seq[i & 7] = v; else if (bank == 1) gc[i & 15] = v; else crtc[i & 31] = v; }
 	int vga_reg(int bank, int i) const { return bank == 0 ? seq[i & 7] : bank == 1 ? gc[i & 15] : crtc[i & 31]; }
 
@@ -100,6 +109,10 @@ private:
 	int trap = -1;
 	String fault;
 	int bp_lin = -1;
+	bool video_dirty = true;
+	std::vector<uint16_t> keys;
+	void bios_int16();
+	void set_return_flag(uint16_t bit, bool on);
 
 	double emu_time = 0.0;
 	double ips = 1000000.0;

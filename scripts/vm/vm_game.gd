@@ -22,6 +22,7 @@ var audio_playback: AudioStreamGeneratorPlayback
 # Emulated time the machine should have reached: advances with real time only, so jumps the core
 # makes (skipping retrace waits) are absorbed instead of piling up and speeding the game up.
 var emu_target := 0.0
+var save_menu: Control
 
 
 func _ready() -> void:
@@ -42,6 +43,7 @@ func _ready() -> void:
 	add_child(picture)
 	Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
 	get_window().focus_exited.connect(_release_mouse)
+	_load_settings()
 	var gen := AudioStreamGenerator.new()
 	gen.mix_rate = 44100
 	gen.buffer_length = 0.25
@@ -54,6 +56,7 @@ func _ready() -> void:
 
 
 func start() -> void:
+	screen_texture = null
 	core = X86Core.new()
 	# DOSBox-X reference speed: 3000 cycles/ms, about 3 million instructions per second.
 	core.set_ips(INSTRUCTIONS_PER_SECOND)
@@ -69,6 +72,10 @@ func _process(delta: float) -> void:
 	if machine.terminated:
 		# The player quit the game in MUSEUM.COM.
 		get_tree().quit()
+		return
+	if save_menu != null:
+		# game paused while the save menu is open; keep the clock from jumping on resume
+		emu_target = core.get_time()
 		return
 	emu_target += minf(delta, MAX_LAG)
 	# if the machine falls more than MAX_LAG behind, drop the backlog rather than race through it
@@ -117,13 +124,72 @@ func run_for(seconds: float, budget_ms: int) -> void:
 			break
 
 
+# Uploads the screen only when the VGA memory, display start or palette changed, reusing the
+# same textures (recreating them every frame was a large share of the frame time on the web).
+var screen_image: Image
+var screen_texture: ImageTexture
+var palette_image: Image
+var palette_texture: ImageTexture
+
+
 func present() -> void:
-	var idx := ImageTexture.create_from_image(
-		Image.create_from_data(SCREEN_WIDTH, SCREEN_HEIGHT, false, Image.FORMAT_R8, machine.screen_indices()))
-	picture.texture = idx
-	dac.set_shader_parameter("indices", idx)
-	dac.set_shader_parameter("palette", ImageTexture.create_from_image(
-		Image.create_from_data(256, 1, false, Image.FORMAT_RGBA8, machine.palette_rgba())))
+	if not core.take_video_dirty() and screen_texture != null:
+		return
+	var idx := machine.screen_indices()
+	var pal := machine.palette_rgba()
+	if screen_texture == null:
+		screen_image = Image.create_from_data(SCREEN_WIDTH, SCREEN_HEIGHT, false, Image.FORMAT_R8, idx)
+		screen_texture = ImageTexture.create_from_image(screen_image)
+		palette_image = Image.create_from_data(256, 1, false, Image.FORMAT_RGBA8, pal)
+		palette_texture = ImageTexture.create_from_image(palette_image)
+		picture.texture = screen_texture
+		dac.set_shader_parameter("indices", screen_texture)
+		dac.set_shader_parameter("palette", palette_texture)
+		return
+	screen_image.set_data(SCREEN_WIDTH, SCREEN_HEIGHT, false, Image.FORMAT_R8, idx)
+	screen_texture.update(screen_image)
+	palette_image.set_data(256, 1, false, Image.FORMAT_RGBA8, pal)
+	palette_texture.update(palette_image)
+
+
+# F2 switches between the game's own 320x200 shape (black bars) and stretched to fill the window.
+const SETTINGS := "user://settings.cfg"
+var stretch_fill := false
+
+
+func _set_stretch(fill: bool) -> void:
+	stretch_fill = fill
+	get_tree().root.content_scale_aspect = (Window.CONTENT_SCALE_ASPECT_IGNORE if fill
+		else Window.CONTENT_SCALE_ASPECT_KEEP)
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	cfg.set_value("display", "stretch_fill", fill)
+	cfg.save(SETTINGS)
+
+
+func _load_settings() -> void:
+	var cfg := ConfigFile.new()
+	if cfg.load(SETTINGS) == OK:
+		_set_stretch(bool(cfg.get_value("display", "stretch_fill", false)))
+
+
+# F1 opens the save menu (export/import the game's saves); the game is paused meanwhile.
+func _toggle_save_menu() -> void:
+	if save_menu != null:
+		save_menu.queue_free()
+		save_menu = null
+		return
+	_release_mouse()
+	save_menu = load("res://scripts/vm/save_menu.gd").new()
+	save_menu.closed.connect(_toggle_save_menu)
+	save_menu.imported.connect(_restart_after_import)
+	add_child(save_menu)
+
+
+# Imported saves are picked up by starting the game fresh (it reads its files at start-up).
+func _restart_after_import() -> void:
+	start()
+	emu_target = 0.0
 
 
 # The game draws its own cursor and moves it from relative motion (INT 33h mickeys) clamped to
@@ -147,6 +213,16 @@ func _captured() -> bool:
 
 func _input(event: InputEvent) -> void:
 	if not started:
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F1:
+		_toggle_save_menu()
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F2:
+		_set_stretch(not stretch_fill)
+		get_viewport().set_input_as_handled()
+		return
+	if save_menu != null:
 		return
 	# Ctrl or Alt on its own releases the mouse (the game never reads them as keys: the BIOS
 	# reports no keystroke for a bare modifier); Ctrl+F10 does too, as in DOSBox.
@@ -191,11 +267,11 @@ func _game_point(pos: Vector2) -> Vector2i:
 
 
 func _unhandled_key_input(event: InputEvent) -> void:
-	if not started or not event is InputEventKey or not event.pressed:
+	if not started or save_menu != null or not event is InputEventKey or not event.pressed:
 		return
 	var code := _bios_key(event)
 	if code != 0:
-		machine.keys.append(code)
+		core.push_key(code)
 
 
 # BIOS scan code << 8 | ASCII for the keys the game reads.
@@ -210,7 +286,6 @@ func _bios_key(e: InputEventKey) -> int:
 		KEY_DOWN: return 0x5000
 		KEY_LEFT: return 0x4B00
 		KEY_RIGHT: return 0x4D00
-		KEY_F1: return 0x3B00
 	if e.unicode > 0 and e.unicode < 128:
 		return e.unicode
 	return 0

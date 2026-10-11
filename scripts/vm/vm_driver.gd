@@ -9,6 +9,7 @@ var core: X86Core
 var cpu: CoreView
 var m: DosMachine
 var outdir := ""
+var trap_counts := {}
 
 
 func _init() -> void:
@@ -39,7 +40,7 @@ func _init() -> void:
 		match p[0]:
 			"wait": run(float(p[1]))
 			"key":
-				m.keys.append(_key(p[1]))
+				core.push_key(_key(p[1]))
 				run(0.3)
 			"move":
 				m.mouse_update(int(p[1]), int(p[2]), 0)
@@ -83,6 +84,8 @@ func _init() -> void:
 			print("program terminated")
 			break
 	print("done at t=%.1f" % core.get_time())
+	if OS.get_environment("VM_TRAPS") == "1":
+		print("traps: ", trap_counts)
 	quit()
 
 
@@ -102,6 +105,11 @@ func run(seconds: float) -> void:
 		m.service_mouse()
 		var st := core.run(minf(target, core.get_time() + 0.01), 2000000)
 		if st == X86Core.TRAP:
+			var tn := core.get_trap()
+			var key := "%02X" % tn
+			if tn == 0x21 or tn == 0x16 or tn == 0x33 or tn == 0x10:
+				key += "/%02X" % (core.get_reg(0) >> 8 if tn != 0x33 else core.get_reg(0))
+			trap_counts[key] = trap_counts.get(key, 0) + 1
 			cpu.pull()
 			m.native(core.get_trap())
 			cpu.flush()
