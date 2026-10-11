@@ -6,9 +6,12 @@ extends Control
 
 const SCREEN_WIDTH := 320
 const SCREEN_HEIGHT := 200
-const FRAME_BUDGET_MS := 14
+const FRAME_BUDGET_MS := 20
 const MAX_LAG := 0.1
 const INSTRUCTIONS_PER_SECOND := 3000000.0
+# F3 speeds the emulated CPU up. The game has no clock of its own, so animations, walking and
+# text holds all follow the CPU speed; 1x matches the DOSBox reference (3000 cycles/ms).
+const SPEEDS := [1.0, 1.5, 2.0, 3.0]
 const AUDIO_BACKLOG_FRAMES := 4410
 
 var core: X86Core
@@ -59,7 +62,7 @@ func start() -> void:
 	screen_texture = null
 	core = X86Core.new()
 	# DOSBox-X reference speed: 3000 cycles/ms, about 3 million instructions per second.
-	core.set_ips(INSTRUCTIONS_PER_SECOND)
+	core.set_ips(INSTRUCTIONS_PER_SECOND * SPEEDS[speed_index])
 	cpu = CoreView.new(core)
 	machine = DosMachine.new(cpu)
 	started = machine.load_program("MUSEUM.COM", "", 0x0100, 0)
@@ -82,6 +85,14 @@ func _process(delta: float) -> void:
 	emu_target = minf(emu_target, core.get_time() + MAX_LAG)
 	if core.get_time() < emu_target:
 		run_for(emu_target - core.get_time(), FRAME_BUDGET_MS)
+	# report real lag (the host can't keep up), as opposed to the game's own pace
+	if emu_target - core.get_time() > 0.05:
+		lag_time += delta
+		if lag_time > 3.0:
+			lag_time = 0.0
+			print("vm: falling behind (the emulator can't keep up on this machine)")
+	else:
+		lag_time = 0.0
 	present()
 	feed_audio()
 
@@ -155,6 +166,9 @@ func present() -> void:
 # F2 switches between the game's own 320x200 shape (black bars) and stretched to fill the window.
 const SETTINGS := "user://settings.cfg"
 var stretch_fill := false
+var speed_index := 0
+var speed_label: Label
+var lag_time := 0.0
 
 
 func _set_stretch(fill: bool) -> void:
@@ -171,6 +185,34 @@ func _load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(SETTINGS) == OK:
 		_set_stretch(bool(cfg.get_value("display", "stretch_fill", false)))
+		speed_index = clampi(int(cfg.get_value("cpu", "speed", 0)), 0, SPEEDS.size() - 1)
+
+
+func _cycle_speed() -> void:
+	speed_index = (speed_index + 1) % SPEEDS.size()
+	# keep emulated time continuous: the clock is in seconds, only the instruction rate changes
+	core.set_ips(INSTRUCTIONS_PER_SECOND * SPEEDS[speed_index])
+	var cfg := ConfigFile.new()
+	cfg.load(SETTINGS)
+	cfg.set_value("cpu", "speed", speed_index)
+	cfg.save(SETTINGS)
+	_flash("Speed %sx" % str(SPEEDS[speed_index]))
+
+
+# Small message in the corner for a couple of seconds.
+func _flash(text: String) -> void:
+	if speed_label == null:
+		speed_label = Label.new()
+		speed_label.position = Vector2(4, 2)
+		speed_label.add_theme_font_size_override("font_size", 8)
+		speed_label.add_theme_color_override("font_shadow_color", Color.BLACK)
+		add_child(speed_label)
+	speed_label.text = text
+	speed_label.visible = true
+	speed_label.modulate.a = 1.0
+	var tw := create_tween()
+	tw.tween_interval(1.5)
+	tw.tween_property(speed_label, "modulate:a", 0.0, 0.5)
 
 
 # F1 opens the save menu (export/import the game's saves); the game is paused meanwhile.
@@ -220,6 +262,10 @@ func _input(event: InputEvent) -> void:
 		return
 	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F2:
 		_set_stretch(not stretch_fill)
+		get_viewport().set_input_as_handled()
+		return
+	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_F3:
+		_cycle_speed()
 		get_viewport().set_input_as_handled()
 		return
 	if save_menu != null:
@@ -274,18 +320,49 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		core.push_key(code)
 
 
-# BIOS scan code << 8 | ASCII for the keys the game reads.
+# BIOS keystrokes are scan code << 8 | ASCII. Programs read the whole word (Borland's
+# _bios_keybrd), and text boxes ignore keys without a scan code, so printable characters get the
+# scan code of the US-layout key that types them.
+const SCAN_ROWS := {
+	0x02: "1!", 0x03: "2@", 0x04: "3#", 0x05: "4$", 0x06: "5%", 0x07: "6^", 0x08: "7&",
+	0x09: "8*", 0x0A: "9(", 0x0B: "0)", 0x0C: "-_", 0x0D: "=+", 0x1A: "[{", 0x1B: "]}",
+	0x27: ";:", 0x28: "'\"", 0x29: "`~", 0x2B: "\\|", 0x33: ",<", 0x34: ".>", 0x35: "/?",
+	0x39: " ",
+}
+const SCAN_LETTERS := "qwertyuiop.....asdfghjkl......zxcvbnm"
+var scan_of := {}
+
+
+func _scan_code(c: String) -> int:
+	if scan_of.is_empty():
+		for code in SCAN_ROWS:
+			for ch in SCAN_ROWS[code]:
+				scan_of[ch] = code
+		for i in SCAN_LETTERS.length():
+			var ch := SCAN_LETTERS[i]
+			if ch != ".":
+				scan_of[ch] = 0x10 + i
+				scan_of[ch.to_upper()] = 0x10 + i
+	return scan_of.get(c, 0)
+
+
 func _bios_key(e: InputEventKey) -> int:
 	match e.keycode:
 		KEY_ESCAPE: return 0x011B
 		KEY_ENTER, KEY_KP_ENTER: return 0x1C0D
-		KEY_SPACE: return 0x3920
 		KEY_BACKSPACE: return 0x0E08
 		KEY_TAB: return 0x0F09
 		KEY_UP: return 0x4800
 		KEY_DOWN: return 0x5000
 		KEY_LEFT: return 0x4B00
 		KEY_RIGHT: return 0x4D00
+		KEY_HOME: return 0x4700
+		KEY_END: return 0x4F00
+		KEY_PAGEUP: return 0x4900
+		KEY_PAGEDOWN: return 0x5100
+		KEY_INSERT: return 0x5200
+		KEY_DELETE: return 0x5300
 	if e.unicode > 0 and e.unicode < 128:
-		return e.unicode
+		var c := char(e.unicode)
+		return (_scan_code(c) << 8) | e.unicode
 	return 0

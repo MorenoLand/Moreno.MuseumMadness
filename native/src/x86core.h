@@ -84,6 +84,7 @@ public:
 	// audio: stereo frames generated up to the current emulated time (OPL + Sound Blaster DSP)
 	PackedVector2Array take_audio(int max_frames);
 	int audio_available() const { return int(audio_count); }
+	void set_audio_enabled(bool on) { audio_on = on; }
 	int get_stat(int i) const { return (i == 0) ? stat_irq0 : (i == 1) ? stat_bios : (i == 2) ? pit_divisor : (i == 3) ? int(flags) : (i == 4) ? int(stat_ifoff / 1000) : (i == 5) ? int(stat_warp * 1000) : 0; }
 
 	// unhandled-port log for debugging
@@ -110,6 +111,7 @@ private:
 	String fault;
 	int bp_lin = -1;
 	bool video_dirty = true;
+	bool audio_on = true;
 	std::vector<uint16_t> keys;
 	void bios_int16();
 	void set_return_flag(uint16_t bit, bool on);

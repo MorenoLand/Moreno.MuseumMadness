@@ -284,12 +284,15 @@ func _mouse_event_regs() -> void:
 func _int33() -> void:
 	if trace_dos and not mouse_calls.has(cpu.r[0]):
 		mouse_calls[cpu.r[0]] = true
-		print("int33 AX=%04X BX=%04X CX=%04X DX=%04X" % [cpu.r[0], cpu.r[3], cpu.r[1], cpu.r[2]])
+		print("int33 AX=%04X BX=%04X CX=%04X DX=%04X ES=%04X" % [cpu.r[0], cpu.r[3], cpu.r[1], cpu.r[2], cpu.s[0]])
 	match cpu.r[0]:
 		0x00:
+			# reset: also forgets the event handler, as a real mouse driver does
 			cpu.r[0] = 0xFFFF
 			cpu.r[3] = 2
 			mouse_visible = 0
+			mouse_handler_mask = 0
+			mouse_pending = 0
 		0x01: mouse_visible += 1
 		0x02: mouse_visible -= 1
 		0x03:
@@ -656,6 +659,8 @@ func _free_runs() -> Array:
 
 func _alloc() -> void:
 	var paras := cpu.r[3]
+	if trace_dos:
+		print("dos: alloc %04X paras" % paras)
 	var largest := 0
 	for run in _free_runs():
 		largest = maxi(largest, run[1])
@@ -864,7 +869,11 @@ func _exec() -> void:
 		"r": cpu.r.duplicate(), "s": cpu.s.duplicate(), "ip": cpu.ip, "flags": cpu.flags,
 		"psp": psp_seg, "free": mcb_free_seg, "dta_seg": dta_seg, "dta_off": dta_off,
 		"blocks": blocks.duplicate(true), "ivt": cpu.core.read(0, 0x400),
+		"mouse_mask": mouse_handler_mask, "mouse_handler": cpu.core.read(BIOS_SEG * 16 + 0xE020, 4),
 	})
+	# The child starts with no mouse handler: the parent's points into the parent's own code.
+	mouse_handler_mask = 0
+	mouse_pending = 0
 	var child_seg := -1
 	var best := 0
 	for run in _free_runs():
@@ -872,6 +881,8 @@ func _exec() -> void:
 			best = run[1]
 			child_seg = run[0] + 0x10
 	print("dos: exec %s '%s' at %04X" % [name, shown, child_seg])
+	if trace_dos:
+		print("dos: blocks ", blocks)
 	if not load_program(name, cmd, child_seg, psp_seg):
 		var ctx: Dictionary = exec_stack.pop_back()
 		cpu.r = ctx.r
@@ -879,6 +890,8 @@ func _exec() -> void:
 		cpu.ip = ctx.ip
 		blocks = ctx.blocks
 		cpu.core.load(0, ctx.ivt)
+		mouse_handler_mask = ctx.mouse_mask
+		cpu.core.load(BIOS_SEG * 16 + 0xE020, ctx.mouse_handler)
 		cpu.r[0] = 2
 		set_cf(true)
 		return
@@ -901,6 +914,11 @@ func _terminate(code: int) -> void:
 	mcb_free_seg = ctx.free
 	blocks = ctx.blocks
 	cpu.core.load(0, ctx.ivt)
+	# Drop the child's mouse handler (its code is gone) and give the parent back its own.
+	mouse_handler_mask = ctx.mouse_mask
+	cpu.core.load(BIOS_SEG * 16 + 0xE020, ctx.mouse_handler)
+	mouse_pending = 0
+	mouse_waiting = false
 	dta_seg = ctx.dta_seg
 	dta_off = ctx.dta_off
 	# back in the parent's INT 21 stub (F1 21 CF): clear CF in its IRET frame

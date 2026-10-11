@@ -76,6 +76,7 @@ void X86Core::_bind_methods() {
 	ClassDB::bind_method(D_METHOD("set_breakpoint", "seg", "off"), &X86Core::set_breakpoint);
 	ClassDB::bind_method(D_METHOD("take_audio", "max_frames"), &X86Core::take_audio);
 	ClassDB::bind_method(D_METHOD("audio_available"), &X86Core::audio_available);
+	ClassDB::bind_method(D_METHOD("set_audio_enabled", "on"), &X86Core::set_audio_enabled);
 	ClassDB::bind_method(D_METHOD("get_stat", "i"), &X86Core::get_stat);
 	BIND_ENUM_CONSTANT(TIME_REACHED);
 	BIND_ENUM_CONSTANT(TRAP);
@@ -157,8 +158,24 @@ void X86Core::vga_write(uint32_t a, uint8_t v) {
 		planes[off & 3][(off >> 2) & 0xFFFF] = v;
 		return;
 	}
-	// Full VGA write pipeline: rotate, set/reset, logical function, bit mask (modes 0-3).
 	int mask = seq[2] & 0x0F;
+	// Fast path: write mode 0 with no rotate, logic op, set/reset or bit mask (the usual case).
+	if ((gc[5] & 3) == 0 && gc[3] == 0 && (gc[1] & 0x0F) == 0 && gc[8] == 0xFF) {
+		if (mask & 1) planes[0][off] = v;
+		if (mask & 2) planes[1][off] = v;
+		if (mask & 4) planes[2][off] = v;
+		if (mask & 8) planes[3][off] = v;
+		return;
+	}
+	// Latch copy (write mode 1), used for fast screen-to-screen blits.
+	if ((gc[5] & 3) == 1) {
+		if (mask & 1) planes[0][off] = latch[0];
+		if (mask & 2) planes[1][off] = latch[1];
+		if (mask & 4) planes[2][off] = latch[2];
+		if (mask & 8) planes[3][off] = latch[3];
+		return;
+	}
+	// Full VGA write pipeline: rotate, set/reset, logical function, bit mask (modes 0-3).
 	int mode = gc[5] & 3;
 	int rot = gc[3] & 7;
 	int func = (gc[3] >> 3) & 3;
@@ -649,33 +666,57 @@ int X86Core::run(double until, int budget) {
 	while (emu_time < until) {
 		if (halted) return HALTED;
 		if (count >= budget) return BUDGET;
-		step();
-		if (!(flags & IF_)) stat_ifoff++;
-		count++;
-		executed++;
-		emu_time += dt;
-		pit_accum += pit_step;
+		// Run a straight block of instructions up to the next event (timer tick, sound batch,
+		// time limit or budget), checking only what can stop execution inside the block.
+		int64_t to_until = int64_t((until - emu_time) * ips) + 1;
+		int64_t to_pit = int64_t((double(pit_divisor) - pit_accum) / pit_step) + 1;
+		int64_t to_audio = int64_t((next_audio - emu_time) * ips) + 1;
+		int64_t block = to_until;
+		if (to_pit < block) block = to_pit;
+		if (to_audio < block) block = to_audio;
+		if (budget - count < block) block = budget - count;
+		if (block < 1) block = 1;
+		int64_t done = 0;
+		bool stop = false;
+		while (done < block) {
+			step();
+			done++;
+			if (trap >= 0 || halted || !fault.is_empty()) { stop = true; break; }
+			if (irq0_pending && (flags & IF_) && !(pic_mask & 1)) {
+				irq0_pending = false;
+				stat_irq0++;
+				do_interrupt(8);
+			}
+			if (irq5_pending && (flags & IF_) && !(pic_mask & 0x20)) {
+				irq5_pending = false;
+				do_interrupt(0x0D);
+			}
+			if (bp_lin >= 0 && int(lin(s[1], ip)) == bp_lin) { stop = true; break; }
+		}
+		count += int(done);
+		executed += done;
+		emu_time += dt * double(done);
+		pit_accum += pit_step * double(done);
 		if (pit_accum >= double(pit_divisor)) {
 			pit_accum -= double(pit_divisor);
+			if (pit_accum > double(pit_divisor)) pit_accum = 0.0;
 			irq0_pending = true;
-		}
-		// The PIC holds a request until interrupts are enabled (and the line is unmasked).
-		if (irq0_pending && (flags & IF_) && !(pic_mask & 1)) {
-			irq0_pending = false;
-			stat_irq0++;
-			do_interrupt(8);
+			if ((flags & IF_) && !(pic_mask & 1)) {
+				irq0_pending = false;
+				stat_irq0++;
+				do_interrupt(8);
+			}
 		}
 		if (emu_time >= next_audio) {
 			audio_until(emu_time);
 			next_audio = emu_time + 0.001;
 		}
-		if (irq5_pending && (flags & IF_) && !(pic_mask & 0x20)) {
-			irq5_pending = false;
-			do_interrupt(0x0D);
+		if (stop) {
+			if (trap >= 0) return TRAP;
+			if (!fault.is_empty()) return FAULT;
+			if (halted) return HALTED;
+			return BREAK;
 		}
-		if (trap >= 0) return TRAP;
-		if (!fault.is_empty()) return FAULT;
-		if (bp_lin >= 0 && int(lin(s[1], ip)) == bp_lin) return BREAK;
 	}
 	return TIME_REACHED;
 }
@@ -1256,6 +1297,10 @@ void X86Core::dsp_command(int cmd) {
 }
 
 void X86Core::audio_until(double t) {
+	if (!audio_on) {
+		audio_done = std::floor(t * AUDIO_RATE);
+		return;
+	}
 	double target = std::floor(t * AUDIO_RATE);
 	int frames = int(target - audio_done);
 	if (frames <= 0) return;

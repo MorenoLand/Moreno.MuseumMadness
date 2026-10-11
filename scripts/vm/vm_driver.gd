@@ -10,6 +10,7 @@ var cpu: CoreView
 var m: DosMachine
 var outdir := ""
 var trap_counts := {}
+var bench_t0 := 0
 
 
 func _init() -> void:
@@ -61,6 +62,16 @@ func _init() -> void:
 			"up":
 				m.mouse_update(int(p[1]), int(p[2]), 0)
 				run(0.3)
+			"terminate":
+				# ends the running child program with an exit code, as if it had quit
+				cpu.pull()
+				m._terminate(int(p[1]))
+				cpu.flush()
+				run(0.2)
+			"wiggle":
+				for i in int(p[1]):
+					m.mouse_update(100 + (i % 2) * 50, 100, 0)
+					run(0.1)
 			"shot": shot(p[1])
 			"regs":
 				var t := "seq:"
@@ -83,7 +94,7 @@ func _init() -> void:
 		if m.terminated:
 			print("program terminated")
 			break
-	print("done at t=%.1f" % core.get_time())
+	print("done at t=%.1f real %d ms" % [core.get_time(), Time.get_ticks_msec() - bench_t0])
 	if OS.get_environment("VM_TRAPS") == "1":
 		print("traps: ", trap_counts)
 	quit()
