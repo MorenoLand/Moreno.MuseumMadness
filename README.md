@@ -9,7 +9,8 @@ It runs on desktop and in the browser.
 
 ## Getting started
 
-1. Install [Redot](https://www.redotengine.org/) 26.2 (Godot 4.5 should work too).
+1. Install [Redot](https://www.redotengine.org/) 26.2 (Godot 4.5 should work too) and build the
+   native library (see below).
 2. Copy the files from your *Museum Madness* install (`MUSEUM.COM`, `MUSEUM.RES`, `MUSEUM.NDX`,
    the `MUSEUM*.OVL` files, `MUSEUM.CFG` and the rest of the folder) into `assets/original/`.
    `docs/FILE_INVENTORY.md` lists the files and their SHA-256 hashes if you want to check your copy.
@@ -42,8 +43,9 @@ anywhere public: it contains the game data.
 
 ## Building the native part
 
-The emulator core is a small GDExtension in `native/`. Prebuilt libraries for Windows and the web
-are in `bin/`, so you only need this if you change the C++. See `docs/NATIVE_BUILD.md`.
+The emulator core is a small GDExtension in `native/`. Build it once before opening the project
+(Windows, and the web if you want to export there). See `docs/NATIVE_BUILD.md`; the libraries
+end up in `bin/`.
 
 ## Layout
 
@@ -55,7 +57,7 @@ scripts/formats/   readers for the game's resource archive, images, fonts and te
 scripts/inspector/ resource browser for poking around the data files
 scripts/port/      an earlier hand-written port of the intro, kept for reference
 docs/              file notes and build instructions
-tools/             data copy scripts, DOSBox-X launcher for comparing with the original
+tools/             scripts that copy your game data for export
 ```
 
 ## Status

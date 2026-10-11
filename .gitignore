@@ -34,3 +34,7 @@
 *.TMP
 ~*
 .sconsign.dblite
+/bin/*.dll
+/bin/*.wasm
+/bin/*.so
+/bin/*.dylib
