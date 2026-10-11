@@ -163,9 +163,10 @@ func present() -> void:
 	palette_texture.update(palette_image)
 
 
-# F2 switches between the game's own 320x200 shape (black bars) and stretched to fill the window.
+# F2 switches between stretched to fill the window (the default) and the game's own 320x200
+# shape with black bars.
 const SETTINGS := "user://settings.cfg"
-var stretch_fill := false
+var stretch_fill := true
 var speed_index := 0
 var speed_label: Label
 var lag_time := 0.0
@@ -183,8 +184,10 @@ func _set_stretch(fill: bool) -> void:
 
 func _load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SETTINGS) == OK:
-		_set_stretch(bool(cfg.get_value("display", "stretch_fill", false)))
+	var loaded := cfg.load(SETTINGS) == OK
+	# stretched to fill is the default; F2 switches to the original shape
+	_set_stretch(bool(cfg.get_value("display", "stretch_fill", true)) if loaded else true)
+	if loaded:
 		speed_index = clampi(int(cfg.get_value("cpu", "speed", 0)), 0, SPEEDS.size() - 1)
 
 

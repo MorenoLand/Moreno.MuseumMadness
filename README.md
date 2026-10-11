@@ -57,7 +57,7 @@ supply your own copy of the game.
 - **Ctrl**, **Alt** or **Ctrl+F10** gives the mouse back.
 - **Esc** skips the intro (and a few other scenes), **Space** turns dialogue pages.
 - **F1** opens the save menu: export your saves as a `.zip`, import one, or open the save folder.
-- **F2** switches between the original shape and stretched to fill the window.
+- **F2** switches between stretched to fill the window (the default) and the original shape.
 - **F3** changes the speed (original, 1.5x, 2x, 3x). The game has no clock of its own, so 1x is
   how it ran on a PC of the time; faster speeds smooth out the animations but also shorten the
   pauses in the dialogue.
